@@ -1,8 +1,8 @@
 {
-  "name": "com.focus-creative-games.hybridclr_unity",
+  "name": "com.henuo.hybridclr_unity",
   "version": "0.3.0",
   "displayName": "HybridCLR",
-  "description": "Unity package for HybridCLR. It includes editor and runtime scripts and assets for HybridCLR",
+  "description": "这是本人整理的UPM插件,并非是本人开发 著作权由开发者所有 开发者github:https://github.com/focus-creative-games/hybridclr_unity\nUnity package for HybridCLR. It includes editor and runtime scripts and assets for HybridCLR",
   "category": "Runtime",
   "documentationUrl": "https://focus-creative-games.github.io/hybridclr/index",
   "changelogUrl": "https://github.com/focus-creative-games/hybridclr/commits/main",
@@ -14,7 +14,7 @@
     "focus-creative-games"
   ],
   "author": {
-    "name": "focus-creative-games",
+    "name": "HeNuo",
     "email": "hybridclr@focus-creative-games.com",
     "url": "https://github.com/focus-creative-games/"
   }
