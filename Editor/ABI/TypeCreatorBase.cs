@@ -5,6 +5,7 @@ using System.Collections.Generic;
 using System.Linq;
 using System.Text;
 using System.Threading.Tasks;
+using UnityEngine;
 
 namespace HybridCLR.Editor.ABI
 {
@@ -14,7 +15,7 @@ namespace HybridCLR.Editor.ABI
 
         public virtual bool IsSupportHFA => false;
 
-        public virtual bool IsSupportSingletonStruct => false;
+        public virtual bool IsSupportWebGLSpecialValueType => false;
 
         public TypeInfo GetNativeIntTypeInfo() => IsArch32 ? TypeInfo.s_i4 : TypeInfo.s_i8;
 
@@ -69,11 +70,15 @@ namespace HybridCLR.Editor.ABI
                 case ElementType.Module:
                 case ElementType.Var:
                 case ElementType.MVar:
-                return GetNativeIntTypeInfo();
+                    return GetNativeIntTypeInfo();
                 case ElementType.TypedByRef: return CreateValueType(type);
                 case ElementType.ValueType:
                 {
                     TypeDef typeDef = type.ToTypeDefOrRef().ResolveTypeDef();
+                    if (typeDef == null)
+                    {
+                        throw new Exception($"type:{type} 未能找到定义。请尝试 `HybridCLR/Genergate/LinkXml`，然后Build一次生成AOT dll，再重新生成桥接函数");
+                    }
                     if (typeDef.IsEnum)
                     {
                         return CreateTypeInfo(typeDef.GetEnumUnderlyingType());
@@ -100,7 +105,7 @@ namespace HybridCLR.Editor.ABI
 
         private static bool IsNotHFAFastCheck(int typeSize)
         {
-            return typeSize != 8 && typeSize != 12 && typeSize != 16 && typeSize != 24 && typeSize != 32;
+            return typeSize % 4 != 0 || typeSize > 32;
         }
 
         private static bool ComputHFATypeInfo0(TypeSig type, HFATypeInfo typeInfo)
@@ -164,7 +169,7 @@ namespace HybridCLR.Editor.ABI
                 return false;
             }
             bool ok = ComputHFATypeInfo0(type, typeInfo);
-            if (ok && typeInfo.Count >= 2 && typeInfo.Count <= 4)
+            if (ok && typeInfo.Count >= 1 && typeInfo.Count <= 4)
             {
                 int fieldSize = typeInfo.Type.ElementType == ElementType.R4 ? 4 : 8;
                 return typeSize == fieldSize * typeInfo.Count;
@@ -244,6 +249,29 @@ namespace HybridCLR.Editor.ABI
             return true;
         }
 
+        public static bool IsWebGLSpeicalValueType(TypeSig type)
+        {
+            TypeDef typeDef = type.ToTypeDefOrRef().ResolveTypeDefThrow();
+            if (typeDef.IsEnum)
+            {
+                return false;
+            }
+            var fields = typeDef.Fields;// typeDef.GetFields(BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic);
+            if (fields.Count == 0)
+            {
+                return true;
+            }
+            if (fields.All(f => f.IsStatic))
+            {
+                return true;
+            }
+            if (typeDef.IsExplicitLayout && fields.Count(f => !f.IsStatic) > 1)
+            {
+                return true;
+            }
+            return false;
+        }
+
         protected static TypeInfo CreateGeneralValueType(TypeSig type, int size, int aligment)
         {
             System.Diagnostics.Debug.Assert(size % aligment == 0);
@@ -265,16 +293,24 @@ namespace HybridCLR.Editor.ABI
                 bool isFloat = hfaTypeInfo.Type.ElementType == ElementType.R4;
                 switch (hfaTypeInfo.Count)
                 {
+                    case 1: return isFloat ? TypeInfo.s_r4 : TypeInfo.s_r8;
                     case 2: return isFloat ? TypeInfo.s_vf2 : TypeInfo.s_vd2;
                     case 3: return isFloat ? TypeInfo.s_vf3 : TypeInfo.s_vd3;
                     case 4: return isFloat ? TypeInfo.s_vf4 : TypeInfo.s_vd4;
                     default: throw new NotSupportedException();
                 }
             }
-            //else if(IsSupportSingletonStruct && TryComputSingletonStruct(type, out var ssTypeInfo))
-            //{
-            //    return CreateTypeInfo(ssTypeInfo.Type);
-            //}
+            if (IsSupportWebGLSpecialValueType && IsWebGLSpeicalValueType(type))
+            {
+                switch (typeAligment)
+                {
+                    case 1: return new TypeInfo(ParamOrReturnType.SPECIAL_STRUCTURE_ALIGN1, typeSize);
+                    case 2: return new TypeInfo(ParamOrReturnType.SPECIAL_STRUCTURE_ALIGN2, typeSize);
+                    case 4: return new TypeInfo(ParamOrReturnType.SPECIAL_STRUCTURE_ALIGN4, typeSize);
+                    case 8: return new TypeInfo(ParamOrReturnType.SPECIAL_STRUCTURE_ALIGN8, typeSize);
+                    default: throw new NotSupportedException();
+                }
+            }
             else
             {
                 // 64位下结构体内存对齐规则是一样的

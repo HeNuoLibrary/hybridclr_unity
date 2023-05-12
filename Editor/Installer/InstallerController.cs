@@ -18,59 +18,71 @@ namespace HybridCLR.Editor.Installer
     public enum InstallErrorCode
     {
         Ok,
-        InvalidUnityInstallPath,
-        Il2CppInstallPathNotMatchIl2CppBranch,
-        Il2CppInstallPathNotExists,
-        NotIl2CppPath,
     }
 
-    public partial class InstallerController
+
+
+
+    public class InstallerController
     {
         private const string hybridclr_repo_path = "hybridclr_repo";
-        private const string hybridclr_url = "hybridclr";
+
         private const string il2cpp_plus_repo_path = "il2cpp_plus_repo";
-        private const string il2cpp_plus_url = "il2cpp_plus";
-        
-        private string m_Il2CppInstallDirectory;
 
-        public string Il2CppInstallDirectory
-        {
-            get
-            {
-                return m_Il2CppInstallDirectory;
-            }
-            set
-            {
-                m_Il2CppInstallDirectory = value?.Replace('\\', '/');
-                if (!string.IsNullOrEmpty(m_Il2CppInstallDirectory))
-                {
-                    EditorPrefs.SetString("UnityInstallDirectory", m_Il2CppInstallDirectory);
-                }
-            }
-        }
+        public int MajorVersion => _curVersion.major;
 
-        private string GetIl2CppPlusBranchByUnityVersion(string unityVersion)
-        {
-            if (unityVersion.Contains("2019."))
-            {
-                return "2019.4.40";
-            }
-            if (unityVersion.Contains("2020."))
-            {
-                return "2020.3.33";
-            }
-            if (unityVersion.Contains("2021."))
-            {
-                return "2021.3.1";
-            }
-            return "not support";
-        }
+        private readonly UnityVersion _curVersion;
 
-        public string Il2CppBranch => GetIl2CppPlusBranchByUnityVersion(Application.unityVersion);
+        private readonly HybridclrVersionManifest _versionManifest;
+        private readonly HybridclrVersionInfo _curDefaultVersion;
 
         public InstallerController()
         {
-            PrepareIl2CppInstallPath();
+            _curVersion = ParseUnityVersion(Application.unityVersion);
+            _versionManifest = GetHybridCLRVersionManifest();
+            _curDefaultVersion = _versionManifest.versions.Find(v => v.unity_version == _curVersion.major.ToString());
+        }
+
+        private HybridclrVersionManifest GetHybridCLRVersionManifest()
+        {
+            string versionFile = $"{SettingsUtil.ProjectDir}/{SettingsUtil.HybridCLRDataPathInPackage}/hybridclr_version.json";
+            return JsonUtility.FromJson<HybridclrVersionManifest>(File.ReadAllText(versionFile, Encoding.UTF8));
+        }
+
+        [Serializable]
+        class VersionDesc
+        {
+            public string branch;
+
+            //public string hash;
+        }
+
+        [Serializable]
+        class HybridclrVersionInfo
+        {
+            public string unity_version;
+
+            public VersionDesc hybridclr;
+
+            public VersionDesc il2cpp_plus;
+        }
+
+        [Serializable]
+        class HybridclrVersionManifest
+        {
+            public List<HybridclrVersionInfo> versions;
+        }
+
+        private class UnityVersion
+        {
+            public int major;
+            public int minor1;
+            public int minor2;
+
+            public override string ToString()
+            {
+                return $"{major}.{minor1}.{minor2}";
+            }
         }
 
         private static readonly Regex s_unityVersionPat = new Regex(@"(\d+)\.(\d+)\.(\d+)");
@@ -79,178 +91,91 @@ namespace HybridCLR.Editor.Installer
         public const int min2020_3_CompatibleMinorVersion = 21;
         public const int min2021_3_CompatibleMinorVersion = 0;
 
-        private bool TryParseMinorVersion(string installDir, out (int Major, int Minor1, int Minor2) unityVersion)
+        private UnityVersion ParseUnityVersion(string versionStr)
         {
-            var matches = s_unityVersionPat.Matches(installDir);
+            var matches = s_unityVersionPat.Matches(versionStr);
             if (matches.Count == 0)
             {
-                unityVersion = default;
-                return false;
+                return null;
             }
-            // 找最后一个匹配的，有的人居然会把Unity安装目录放到其他安装版本下。无语！
+            // 找最后一个匹配的
             Match match = matches[matches.Count - 1];
             // Debug.Log($"capture count:{match.Groups.Count} {match.Groups[1].Value} {match.Groups[2].Value}");
             int major = int.Parse(match.Groups[1].Value);
             int minor1 = int.Parse(match.Groups[2].Value);
             int minor2 = int.Parse(match.Groups[3].Value);
-            unityVersion = (major, minor1, minor2);
-            return true;
+            return new UnityVersion { major = major, minor1 = minor1, minor2 = minor2 };
         }
 
-        public string GetCurVersionStr(string installDir)
+        public string GetCurrentUnityVersionMinCompatibleVersionStr()
         {
-            if (TryParseMinorVersion(installDir, out var version))
-            {
-                return $"{version.Major}.{version.Minor1}.{version.Minor2}";
-            }
-            throw new Exception($"not support version:{installDir}");
+            return GetMinCompatibleVersion(MajorVersion);
         }
 
-        public string GetMinCompatibleVersion(string branch)
+        public string GetMinCompatibleVersion(int majorVersion)
         {
-            switch(branch)
+            switch(majorVersion)
             {
-                case "2019.4.40": return $"2019.4.{min2019_4_CompatibleMinorVersion}";
-                case "2020.3.33": return $"2020.3.{min2020_3_CompatibleMinorVersion}";
-                case "2021.3.1": return $"2021.3.{min2021_3_CompatibleMinorVersion}";
-                default: throw new Exception($"not support version:{branch}");
+                case 2019: return $"2019.4.{min2019_4_CompatibleMinorVersion}";
+                case 2020: return $"2020.3.{min2020_3_CompatibleMinorVersion}";
+                case 2021: return $"2021.3.{min2021_3_CompatibleMinorVersion}";
+                default: throw new Exception($"not support version:{majorVersion}");
             }
         }
 
-        private bool IsComaptibleWithIl2CppPlusBranch(string branch, string installDir)
+        public bool IsComaptibleVersion()
         {
-            if (!TryParseMinorVersion(installDir, out var unityVersion))
+            UnityVersion version = _curVersion;
+            switch (version.major)
             {
-                return false;
-            }
-            switch(branch)
-            {
-                case "2019.4.40":
+                case 2019:
                     {
-                        if (unityVersion.Major != 2019 || unityVersion.Minor1 != 4)
+                        if (version.major != 2019 || version.minor1 != 4)
                         {
                             return false;
                         }
-                        return unityVersion.Minor2 >= min2019_4_CompatibleMinorVersion;
+                        return version.minor2 >= min2019_4_CompatibleMinorVersion;
                     }
-                case "2020.3.33":
+                case 2020:
                     {
-                        if (unityVersion.Major != 2020 || unityVersion.Minor1 != 3)
+                        if (version.major != 2020 || version.minor1 != 3)
                         {
                             return false;
                         }
-                        return unityVersion.Minor2 >= min2020_3_CompatibleMinorVersion;
+                        return version.minor2 >= min2020_3_CompatibleMinorVersion;
                     }
-                case "2021.3.1":
+                case 2021:
                     { 
-                        if (unityVersion.Major != 2021 || unityVersion.Minor1 != 3)
+                        if (version.major != 2021 || version.minor1 != 3)
                         {
                             return false;
                         }
-                        return unityVersion.Minor2 >= min2021_3_CompatibleMinorVersion;
+                        return version.minor2 >= min2021_3_CompatibleMinorVersion;
                     }
-                default: throw new Exception($"not support il2cpp_plus branch:{branch}");
+                default: throw new Exception($"not support il2cpp_plus branch:{version.major}");
             }
         }
 
-        void PrepareIl2CppInstallPath()
+        public string HybridclrLocalVersion => _curDefaultVersion.hybridclr.branch;
+
+        public string Il2cppPlusLocalVersion => _curDefaultVersion.il2cpp_plus.branch;
+
+
+        private string GetIl2CppPathByContentPath(string contentPath)
         {
-#if UNITY_EDITOR_WIN
-
-            m_Il2CppInstallDirectory = EditorPrefs.GetString("Il2CppInstallDirectory");
-            if (CheckValidIl2CppInstallDirectory(Il2CppBranch, m_Il2CppInstallDirectory) == InstallErrorCode.Ok)
-            {
-                return;
-            }
-            var il2cppBranch = Il2CppBranch;
-            var curAppInstallPath = EditorApplication.applicationPath;
-            if (IsComaptibleWithIl2CppPlusBranch(il2cppBranch, curAppInstallPath))
-            {
-                Il2CppInstallDirectory = $"{Directory.GetParent(curAppInstallPath)}/Data/il2cpp";
-                return;
-            }
-            string unityHubRootDir = Directory.GetParent(curAppInstallPath).Parent.Parent.ToString();
-            // Debug.Log("unity hub root dir:" + unityHubRootDir);
-            foreach (var unityInstallDir in Directory.GetDirectories(unityHubRootDir, "*", SearchOption.TopDirectoryOnly))
-            {
-                // Debug.Log("Unity install dir:" + unityInstallDir);
-                if (IsComaptibleWithIl2CppPlusBranch(il2cppBranch, unityInstallDir))
-                {
-                    Il2CppInstallDirectory = $"{unityInstallDir}/Editor/Data/il2cpp";
-                    return;
-                }
-            }
-
-            Il2CppInstallDirectory = $"{Directory.GetParent(curAppInstallPath)}/Data/il2cpp";
-#else
-            m_Il2CppInstallDirectory = EditorPrefs.GetString("Il2CppInstallDirectory");
-            if (CheckValidIl2CppInstallDirectory(Il2CppBranch, m_Il2CppInstallDirectory) == InstallErrorCode.Ok)
-            {
-                return;
-            }
-            var il2cppBranch = Il2CppBranch;
-            var curAppInstallPath = EditorApplication.applicationPath;
-            if (IsComaptibleWithIl2CppPlusBranch(il2cppBranch, curAppInstallPath))
-            {
-                Il2CppInstallDirectory = $"{curAppInstallPath}/Contents/il2cpp";
-                return;
-            }
-            string unityHubRootDir = Directory.GetParent(curAppInstallPath).Parent.Parent.ToString();
-            foreach (var unityInstallDir in Directory.GetDirectories(unityHubRootDir, "*", SearchOption.TopDirectoryOnly))
-            {
-                Debug.Log("nity install dir:" + unityInstallDir);
-                if (IsComaptibleWithIl2CppPlusBranch(il2cppBranch, unityInstallDir))
-                {
-                    Il2CppInstallDirectory = $"{unityInstallDir}/Unity.app/Contents/il2cpp";
-                    return;
-                }
-            }
-
-            Il2CppInstallDirectory = $"{curAppInstallPath}/Contents/il2cpp";
-#endif
+            return $"{contentPath}/il2cpp";
         }
 
-        public void InitHybridCLR(string il2cppBranch, string il2cppInstallPath)
+        public string ApplicationIl2cppPath => GetIl2CppPathByContentPath(EditorApplication.applicationContentsPath);
+
+        public void InstallDefaultHybridCLR()
         {
-            if (CheckValidIl2CppInstallDirectory(il2cppBranch, il2cppInstallPath) != InstallErrorCode.Ok)
-            {
-                Debug.LogError($"请正确设置 il2cpp 安装目录");
-                return;
-            }
-            RunInitLocalIl2CppData(il2cppBranch, il2cppInstallPath);
+            InstallFromLocal(PrepareLibil2cppWithHybridclrFromGitRepo());
         }
 
         public bool HasInstalledHybridCLR()
         {
             return Directory.Exists($"{SettingsUtil.LocalIl2CppDir}/libil2cpp/hybridclr");
-        }
-
-        public InstallErrorCode CheckValidIl2CppInstallDirectory(string il2cppBranch, string installDir)
-        {
-            installDir = installDir.Replace('\\', '/');
-            if (!Directory.Exists(installDir))
-            {
-                return InstallErrorCode.Il2CppInstallPathNotExists;
-            }
-
-            if (!IsComaptibleWithIl2CppPlusBranch(il2cppBranch, installDir))
-            {
-                return TryParseMinorVersion(installDir, out _) ?
-                    InstallErrorCode.Il2CppInstallPathNotMatchIl2CppBranch
-                    : InstallErrorCode.InvalidUnityInstallPath;
-            }
-
-            if (!installDir.EndsWith("/il2cpp"))
-            {
-                return InstallErrorCode.NotIl2CppPath;
-            }
-
-            return InstallErrorCode.Ok;
-        }
-        
-        public bool IsUnity2019(string branch)
-        {
-            return branch.Contains("2019.");
         }
 
 
@@ -272,21 +197,54 @@ namespace HybridCLR.Editor.Installer
 #endif
         }
 
-        private static string GetRepoUrl(string repoName)
+        void CloneBranch(string workDir, string repoUrl, string branch, string repoDir)
         {
-            string repoProvider = SettingsUtil.HybridCLRSettings.cloneHomeURL;
-            return $"{repoProvider}/{repoName}";
+            BashUtil.RemoveDir(repoDir);
+            BashUtil.RunCommand(workDir, "git", new string[] {"clone", "-b", branch, "--depth", "1", repoUrl, repoDir});
         }
 
-        private void RunInitLocalIl2CppData(string il2cppBranch, string il2cppInstallPath)
+        private string PrepareLibil2cppWithHybridclrFromGitRepo()
         {
-#if UNITY_EDITOR_WIN
-            if (!BashUtil.ExistProgram("git"))
-            {
-                throw new Exception($"安装本地il2cpp需要使用git从远程拉取仓库，请先安装git");
-            }
-#endif
+            string workDir = SettingsUtil.HybridCLRDataDir;
+            Directory.CreateDirectory(workDir);
+            //BashUtil.RecreateDir(workDir);
 
+            // clone hybridclr
+            string hybridclrRepoURL = HybridCLRSettings.Instance.hybridclrRepoURL;
+            string hybridclrRepoDir = $"{workDir}/{hybridclr_repo_path}";
+            CloneBranch(workDir, hybridclrRepoURL, _curDefaultVersion.hybridclr.branch, hybridclrRepoDir);
+
+            if (!Directory.Exists(hybridclrRepoDir))
+            {
+                throw new Exception($"clone hybridclr fail. url: {hybridclrRepoURL}");
+            }
+
+            // clone il2cpp_plus
+            string il2cppPlusRepoURL = HybridCLRSettings.Instance.il2cppPlusRepoURL;
+            string il2cppPlusRepoDir = $"{workDir}/{il2cpp_plus_repo_path}";
+            CloneBranch(workDir, il2cppPlusRepoURL, _curDefaultVersion.il2cpp_plus.branch, il2cppPlusRepoDir);
+
+            if (!Directory.Exists(il2cppPlusRepoDir))
+            {
+                throw new Exception($"clone il2cpp_plus fail. url: {il2cppPlusRepoDir}");
+            }
+
+            Directory.Move($"{hybridclrRepoDir}/hybridclr", $"{il2cppPlusRepoDir}/libil2cpp/hybridclr");
+            return $"{il2cppPlusRepoDir}/libil2cpp";
+        }
+
+        public void InstallFromLocal(string libil2cppWithHybridclrSourceDir)
+        {
+            RunInitLocalIl2CppData(ApplicationIl2cppPath, libil2cppWithHybridclrSourceDir, _curVersion);
+        }
+
+        private void RunInitLocalIl2CppData(string editorIl2cppPath, string libil2cppWithHybridclrSourceDir, UnityVersion version)
+        {
+            if (!IsComaptibleVersion())
+            {
+                Debug.LogError($"il2cpp 版本不兼容，最小版本为 {GetCurrentUnityVersionMinCompatibleVersionStr()}");
+                return;
+            }
             string workDir = SettingsUtil.HybridCLRDataDir;
             Directory.CreateDirectory(workDir);
             //BashUtil.RecreateDir(workDir);
@@ -295,63 +253,27 @@ namespace HybridCLR.Editor.Installer
             BashUtil.RemoveDir(buildiOSDir);
             BashUtil.CopyDir($"{SettingsUtil.HybridCLRDataPathInPackage}/iOSBuild", buildiOSDir, true);
 
-            // clone hybridclr
-            string hybridclrRepoDir = $"{workDir}/{hybridclr_repo_path}";
-            {
-                BashUtil.RemoveDir(hybridclrRepoDir);
-                var ret = BashUtil.RunCommand(workDir, "git", new string[]
-                {
-                "clone",
-                "--depth=1",
-                GetRepoUrl(hybridclr_url),
-                hybridclrRepoDir,
-                });
-                //if (ret != 0)
-                //{
-                //    throw new Exception($"git clone 失败");
-                //}
-            }
-
-            // clone il2cpp_plus
-            string il2cppPlusRepoDir = $"{workDir}/{il2cpp_plus_repo_path}";
-            {
-                BashUtil.RemoveDir(il2cppPlusRepoDir);
-                var ret = BashUtil.RunCommand(workDir, "git", new string[]
-                {
-                "clone",
-                "--depth=1",
-                "-b",
-                il2cppBranch,
-                GetRepoUrl(il2cpp_plus_url),
-                il2cppPlusRepoDir,
-                });
-                //if (ret != 0)
-                //{
-                //    throw new Exception($"git clone 失败");
-                //}
-            }
 
             // create LocalIl2Cpp
             string localUnityDataDir = SettingsUtil.LocalUnityDataDir;
             BashUtil.RecreateDir(localUnityDataDir);
 
             // copy MonoBleedingEdge
-            BashUtil.CopyDir($"{Directory.GetParent(il2cppInstallPath)}/MonoBleedingEdge", $"{localUnityDataDir}/MonoBleedingEdge", true);
+            BashUtil.CopyDir($"{Directory.GetParent(editorIl2cppPath)}/MonoBleedingEdge", $"{localUnityDataDir}/MonoBleedingEdge", true);
 
             // copy il2cpp
-            BashUtil.CopyDir(Il2CppInstallDirectory, SettingsUtil.LocalIl2CppDir, true);
+            BashUtil.CopyDir(editorIl2cppPath, SettingsUtil.LocalIl2CppDir, true);
 
             // replace libil2cpp
             string dstLibil2cppDir = $"{SettingsUtil.LocalIl2CppDir}/libil2cpp";
-            BashUtil.CopyDir($"{il2cppPlusRepoDir}/libil2cpp", dstLibil2cppDir, true);
-            BashUtil.CopyDir($"{hybridclrRepoDir}/hybridclr", $"{dstLibil2cppDir}/hybridclr", true);
+            BashUtil.CopyDir($"{libil2cppWithHybridclrSourceDir}", dstLibil2cppDir, true);
 
             // clean Il2cppBuildCache
             BashUtil.RemoveDir($"{SettingsUtil.ProjectDir}/Library/Il2cppBuildCache", true);
 
-            if (IsUnity2019(il2cppBranch))
+            if (version.major == 2019)
             {
-                string curVersionStr = GetCurVersionStr(il2cppInstallPath);
+                string curVersionStr = version.ToString();
                 string srcIl2CppDll = GetUnityIl2CppDllModifiedPath(curVersionStr);
                 if (File.Exists(srcIl2CppDll))
                 {
@@ -366,11 +288,11 @@ namespace HybridCLR.Editor.Installer
             }
             if (HasInstalledHybridCLR())
             {
-                Debug.Log("安装成功！");
+                Debug.Log("安装成功");
             }
             else
             {
-                Debug.LogError("安装失败！");
+                Debug.LogError("安装失败");
             }
         }
     }

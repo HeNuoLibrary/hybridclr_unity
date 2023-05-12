@@ -1,4 +1,5 @@
 using System;
+using System.IO;
 using System.Reflection;
 using UnityEditor;
 using UnityEngine;
@@ -8,11 +9,15 @@ namespace HybridCLR.Editor.Installer
 {
     public class InstallerWindow : EditorWindow
     {
-        private InstallerController m_Controller;
+        private InstallerController _controller;
+
+        private bool _installFromDir;
+
+        private string _installLibil2cppWithHybridclrSourceDir;
 
         private void OnEnable()
         {
-            m_Controller = new InstallerController();
+            _controller = new InstallerController();
         }
 
         private void OnGUI()
@@ -30,123 +35,83 @@ namespace HybridCLR.Editor.Installer
             {
                 SettingsService.OpenProjectSettings("Project/HybridCLR Settings");
             }
-            string minCompatibleVersion = m_Controller.GetMinCompatibleVersion(m_Controller.Il2CppBranch);
-            GUI.enabled = true;
-            GUILayout.Space(10f);
-            EditorGUILayout.LabelField("=======================说明====================");
-            EditorGUILayout.LabelField(
-                $"你所在项目的Unity版本可以与il2cpp_plus版本:{m_Controller.Il2CppBranch} 不一样。\n"
-                + $"如果你的Unity的版本号 >= {minCompatibleVersion}, 可以直接安装。\n"
-                + $"如果你的Unity的版本号 < {minCompatibleVersion}, \n"
-                + $"由于安装HybridCLR时需要从il2cpp_plus兼容版本{m_Controller.Il2CppBranch}（而不是你项目版本）拷贝il2cpp目录，\n"
-                + $"你必须同时安装兼容版本 {m_Controller.Il2CppBranch} 才能完成安装", EditorStyles.wordWrappedLabel);
-            EditorGUILayout.LabelField("==============================================");
+
+            bool hasInstall = _controller.HasInstalledHybridCLR();
 
             GUILayout.Space(10f);
-
-            EditorGUILayout.LabelField($"当前Unity版本: {Application.unityVersion}，匹配的il2cpp_plus分支: {m_Controller.Il2CppBranch}");
-            GUILayout.Space(5f);
 
             EditorGUILayout.BeginVertical("box");
-            bool hasInstall = m_Controller.HasInstalledHybridCLR();
             EditorGUILayout.LabelField($"安装状态：{(hasInstall ? "已安装" : "未安装")}", EditorStyles.boldLabel);
-            if (hasInstall)
-            {
-                EditorGUILayout.LabelField($"HybridCLR 版本:    {m_Controller.GetHybridCLRLocalVersion()}");
-                GUILayout.Space(5f);
-                EditorGUILayout.LabelField($"il2cpp_plus 版本:    {m_Controller.GetIl2cppPlusLocalVersion(m_Controller.Il2CppBranch)}");
-                GUILayout.Space(5f);
-                GUIInstallButton("检查更新", "检查", UpdateHybridCLR);
-                GUILayout.Space(40f);
-            }
-            
-            GUISelectUnityDirectory($"il2cpp_plus分支对应的Unity兼容版本的il2cpp路径", "Select");
             GUILayout.Space(10f);
-            GUIInstallButton("安装最新HybridCLR插件代码到本项目", "安装", InitHybridCLR);
+
+            EditorGUILayout.LabelField($"HybridCLR 版本:    {_controller.HybridclrLocalVersion}");
+            GUILayout.Space(5f);
+            EditorGUILayout.LabelField($"il2cpp_plus 版本:    {_controller.Il2cppPlusLocalVersion}");
+            GUILayout.Space(5f);
+            //GUIInstallButton("检查更新", "检查", UpdateHybridCLR);
+            //GUILayout.Space(40f);
+            
+            GUILayout.Space(10f);
+
+
+            //EditorGUILayout.BeginHorizontal();
+            //EditorGUILayout.LabelField("待安装的 hybridclr 仓库版本号(或branch或tag)(默认取最新版本):", GUILayout.MaxWidth(400));
+            //_hybridclrVersion = EditorGUILayout.TextField(_hybridclrVersion);
+            //EditorGUILayout.EndHorizontal();
+
+            //EditorGUILayout.BeginHorizontal();
+            //EditorGUILayout.LabelField($"待安装的 il2cpp_plus 仓库版本号(或branch或tag)(默认取{_controller.MajorVersion}-main分支最新版本):", GUILayout.MaxWidth(400));
+            //_il2cppPlusVersion = EditorGUILayout.TextField(_il2cppPlusVersion);
+            //EditorGUILayout.EndHorizontal();
+
+
+            GUIInstallButton("安装hybridclr+il2cpp_plus代码到本地目录", "安装");
             EditorGUILayout.EndVertical();
         }
 
-        private void GUIInstallButton(string content, string button, Action onClick)
+        private void GUIInstallButton(string content, string button)
         {
+            EditorGUILayout.BeginHorizontal();
+            _installFromDir = EditorGUILayout.Toggle("从本地复制libil2cpp", _installFromDir);
+            EditorGUI.BeginDisabledGroup(!_installFromDir);
+            EditorGUILayout.TextField(_installLibil2cppWithHybridclrSourceDir, GUILayout.Width(400));
+            if (GUILayout.Button("选择目录", GUILayout.Width(100)))
+            {
+                _installLibil2cppWithHybridclrSourceDir = EditorUtility.OpenFolderPanel("选择libil2cpp目录", Application.dataPath, "libil2cpp");
+            }
+            EditorGUI.EndDisabledGroup();
+            EditorGUILayout.EndHorizontal();
+            
             EditorGUILayout.BeginHorizontal();
             EditorGUILayout.LabelField(content);
-            GUI.enabled = m_Controller.CheckValidIl2CppInstallDirectory(m_Controller.Il2CppBranch, m_Controller.Il2CppInstallDirectory) == InstallErrorCode.Ok;
             if (GUILayout.Button(button, GUILayout.Width(100)))
             {
-                onClick?.Invoke();
+                InstallLocalHybridCLR();
                 GUIUtility.ExitGUI();
             }
-            GUI.enabled = true;
             EditorGUILayout.EndHorizontal();
 
         }
 
-
-        private void GUISelectUnityDirectory(string content, string selectButton)
+        private void InstallLocalHybridCLR()
         {
-            EditorGUILayout.BeginHorizontal();
-            EditorGUILayout.LabelField(content, GUILayout.MaxWidth(300));
-            string il2cppInstallDirectory = m_Controller.Il2CppInstallDirectory = EditorGUILayout.TextField(m_Controller.Il2CppInstallDirectory);
-            if (GUILayout.Button(selectButton, GUILayout.Width(100)))
+            if (_installFromDir)
             {
-                string temp = EditorUtility.OpenFolderPanel(content, m_Controller.Il2CppInstallDirectory, string.Empty);
-                if (!string.IsNullOrEmpty(temp))
+                if (!Directory.Exists(_installLibil2cppWithHybridclrSourceDir))
                 {
-                    il2cppInstallDirectory = m_Controller.Il2CppInstallDirectory = temp;
+                    Debug.LogError($"本地libil2cpp复制目录不存在. '{_installLibil2cppWithHybridclrSourceDir}'");
+                    return;
                 }
-            }
-            EditorGUILayout.EndHorizontal();
-
-            InstallErrorCode err = m_Controller.CheckValidIl2CppInstallDirectory(m_Controller.Il2CppBranch, il2cppInstallDirectory);
-            switch (err)
-            {
-                case InstallErrorCode.Ok:
-                    {
-                        break;
-                    }
-                case InstallErrorCode.Il2CppInstallPathNotExists:
-                    {
-                        EditorGUILayout.HelpBox("li2cpp 路径不存在", MessageType.Error);
-                        break;
-                    }
-                case InstallErrorCode.InvalidUnityInstallPath:
-                    {
-                        EditorGUILayout.HelpBox($"Unity安装目录必须包含版本号，否则无法识别版本", MessageType.Error);
-                        break;
-                    }
-                case InstallErrorCode.Il2CppInstallPathNotMatchIl2CppBranch:
-                    {
-                        EditorGUILayout.HelpBox($"il2cpp 版本不兼容，最小版本为 {m_Controller.GetMinCompatibleVersion(m_Controller.Il2CppBranch)}", MessageType.Error);
-                        break;
-                    }
-                case InstallErrorCode.NotIl2CppPath:
-                    {
-                        EditorGUILayout.HelpBox($"当前选择的路径不是il2cpp目录（必须类似 xxx/il2cpp）", MessageType.Error);
-                        break;
-                    }
-                default: throw new Exception($"not support {err}");
-            }
-        }
-
-        private void InitHybridCLR()
-        {
-            m_Controller.InitHybridCLR(m_Controller.Il2CppBranch, m_Controller.Il2CppInstallDirectory);
-        }
-
-        private void UpdateHybridCLR()
-        {
-            bool hasUpdateIl2Cpp = m_Controller.HasUpdateIl2Cpp(m_Controller.Il2CppBranch);
-            if (hasUpdateIl2Cpp)
-            {
-                bool ret = EditorUtility.DisplayDialog("检查更新", "版本不一致", "更新","取消");
-                if (ret)
+                if (!File.Exists($"{_installLibil2cppWithHybridclrSourceDir}/il2cpp-config.h") || !File.Exists($"{_installLibil2cppWithHybridclrSourceDir}/hybridclr/RuntimeApi.cpp"))
                 {
-                    InitHybridCLR();
+                    Debug.LogError($"本地libil2cpp不是合法有效的源码目录. '{_installLibil2cppWithHybridclrSourceDir}'");
+                    return;
                 }
+                _controller.InstallFromLocal(_installLibil2cppWithHybridclrSourceDir);
             }
             else
             {
-                EditorUtility.DisplayDialog("检查更新", "暂无更新", "确定");    
+                _controller.InstallDefaultHybridCLR();
             }
         }
     }
